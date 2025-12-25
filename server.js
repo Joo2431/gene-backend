@@ -70,23 +70,33 @@ app.post("/api/chat", async (req, res) => {
   }
 
   try {
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: message }
-      ],
-      temperature: 0.7
+    const response = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "system",
+          content: SYSTEM_PROMPT
+        },
+        {
+          role: "user",
+          content: message
+        }
+      ]
     });
 
-    res.json({
-      reply: response.choices[0].message.content
-    });
+    const output =
+      response.output_text ||
+      response.output?.[0]?.content?.[0]?.text;
+
+    res.json({ reply: output });
   } catch (err) {
-    console.error("❌ OpenAI error:", err.message);
-    res.status(500).json({ error: "AI service unavailable" });
+    console.error("❌ OpenAI Error:", err);
+    res.status(500).json({
+      error: err.message || "AI error"
+    });
   }
 });
+
 
 /* -------------------- HEALTH CHECK -------------------- */
 app.get("/health", (req, res) => {
