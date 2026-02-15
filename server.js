@@ -8,7 +8,8 @@ import path from "path";
 import multer from "multer";
 import unzipper from "unzipper";
 import mammoth from "mammoth";
-import pdfParse from "pdf-parse";
+import pkg from "pdf-parse";
+const pdfParse = pkg.default || pkg;
 import { fileURLToPath } from "url";
 
 dotenv.config();
