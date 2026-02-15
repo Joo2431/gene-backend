@@ -5,6 +5,10 @@ import OpenAI from "openai";
 import PDFDocument from "pdfkit";
 import fs from "fs";
 import path from "path";
+import multer from "multer";
+import unzipper from "unzipper";
+import mammoth from "mammoth";
+import pdfParse from "pdf-parse";
 import { fileURLToPath } from "url";
 
 dotenv.config();
@@ -17,14 +21,7 @@ const app = express();
 
 app.use(
   cors({
-    origin: [
-      "https://nugens.in.net",
-      "https://www.nugens.in.net",
-      "http://localhost:3000",
-      "http://localhost:5173"
-    ],
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"]
+    origin: "*"
   })
 );
 
@@ -43,7 +40,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /* =========================================================
-   GEN-E SYSTEM PROMPT
+   ENSURE UPLOAD DIRECTORY EXISTS
+========================================================= */
+
+const uploadDir = path.join(__dirname, "uploads");
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
+/* =========================================================
+   FILE UPLOAD CONFIG
+========================================================= */
+
+const upload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+
+/* =========================================================
+   SYSTEM PROMPT
 ========================================================= */
 
 const SYSTEM_PROMPT = `
@@ -60,8 +76,7 @@ Response Style:
 - Structured markdown
 - Clear headings
 - Bullet points
-- No long essays
-- Practical and realistic
+- Practical and concise
 - End with next action step
 `;
 
@@ -127,6 +142,47 @@ function generateResumePDF(content) {
 }
 
 /* =========================================================
+   FILE TEXT EXTRACTION
+========================================================= */
+
+async function extractTextFromFile(file) {
+  const ext = path.extname(file.originalname).toLowerCase();
+
+  if (ext === ".pdf") {
+    const data = await pdfParse(fs.readFileSync(file.path));
+    return data.text;
+  }
+
+  if (ext === ".docx") {
+    const result = await mammoth.extractRawText({
+      path: file.path
+    });
+    return result.value;
+  }
+
+  if (ext === ".txt") {
+    return fs.readFileSync(file.path, "utf8");
+  }
+
+  if (ext === ".zip") {
+    let combined = "";
+
+    const directory = await unzipper.Open.file(file.path);
+
+    for (const entry of directory.files) {
+      if (!entry.path.endsWith("/")) {
+        const content = await entry.buffer();
+        combined += content.toString() + "\n\n";
+      }
+    }
+
+    return combined;
+  }
+
+  return "Unsupported file format.";
+}
+
+/* =========================================================
    MAIN CHAT ENDPOINT
 ========================================================= */
 
@@ -137,20 +193,17 @@ app.post("/api/chat", async (req, res) => {
     return res.status(400).json({ error: "Invalid message" });
   }
 
-  // Guardrail
   const blocked = guardrail(message);
   if (blocked) {
     return res.json({ reply: blocked });
   }
 
   const intent = detectIntent(message);
-
   let userPrompt = message;
 
-  /* -------------------- RESUME MODE -------------------- */
   if (intent === "resume") {
     userPrompt = `
-Create an ATS-friendly resume using this input:
+Create an ATS-friendly resume using:
 
 ${message}
 
@@ -164,7 +217,6 @@ Format strictly:
 `;
   }
 
-  /* -------------------- INTERVIEW MODE -------------------- */
   if (intent === "interview") {
     userPrompt = `
 Prepare interview guidance for:
@@ -176,12 +228,11 @@ Include:
 ## Quick Analysis
 ## HR Questions
 ## Technical Questions
-## STAR Answer Strategy
+## STAR Strategy
 ## Practical Next Step
 `;
   }
 
-  /* -------------------- SCORE MODE -------------------- */
   if (intent === "score") {
     userPrompt = `
 Evaluate career readiness based on:
@@ -198,7 +249,6 @@ Career Readiness Score: XX%
 `;
   }
 
-  /* -------------------- CAREER MODE -------------------- */
   if (intent === "career") {
     userPrompt = `
 Provide structured career guidance for:
@@ -228,10 +278,8 @@ Include:
       response.output_text ||
       response.output?.[0]?.content?.[0]?.text;
 
-    // Resume PDF handling
     if (intent === "resume") {
       const fileName = generateResumePDF(output);
-
       return res.json({
         reply: output,
         pdf: `/download/${fileName}`
@@ -242,9 +290,42 @@ Include:
 
   } catch (err) {
     console.error("❌ OpenAI Error:", err);
-    res.status(500).json({
-      error: err.message || "AI error"
+    res.status(500).json({ error: "AI processing failed" });
+  }
+});
+
+/* =========================================================
+   FILE UPLOAD ENDPOINT
+========================================================= */
+
+app.post("/api/upload", upload.single("file"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
+
+  try {
+    const extractedText = await extractTextFromFile(req.file);
+
+    const response = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Analyze this document:\n\n${extractedText}`
+        }
+      ]
     });
+
+    const output =
+      response.output_text ||
+      response.output?.[0]?.content?.[0]?.text;
+
+    res.json({ reply: output });
+
+  } catch (err) {
+    console.error("Upload error:", err);
+    res.status(500).json({ error: "File processing failed" });
   }
 });
 
