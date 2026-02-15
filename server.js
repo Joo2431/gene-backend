@@ -8,9 +8,11 @@ import path from "path";
 import multer from "multer";
 import unzipper from "unzipper";
 import mammoth from "mammoth";
-import pkg from "pdf-parse";
-const pdfParse = pkg.default || pkg;
 import { fileURLToPath } from "url";
+
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.js";
+
+
 
 dotenv.config();
 
@@ -149,10 +151,22 @@ function generateResumePDF(content) {
 async function extractTextFromFile(file) {
   const ext = path.extname(file.originalname).toLowerCase();
 
-  if (ext === ".pdf") {
-    const data = await pdfParse(fs.readFileSync(file.path));
-    return data.text;
+ if (ext === ".pdf") {
+  const data = new Uint8Array(fs.readFileSync(file.path));
+
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+
+  let text = "";
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const strings = content.items.map(item => item.str);
+    text += strings.join(" ") + "\n\n";
   }
+
+  return text;
+}
 
   if (ext === ".docx") {
     const result = await mammoth.extractRawText({
