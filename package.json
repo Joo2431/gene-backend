@@ -13,6 +13,7 @@
     "mammoth": "^1.11.0",
     "multer": "^2.0.2",
     "openai": "^6.15.0",
+    "pdf-parse": "^2.4.5",
     "pdfjs-dist": "^3.11.174",
     "pdfkit": "^0.17.2",
     "unzipper": "^0.12.3"

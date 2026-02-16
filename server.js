@@ -10,10 +10,6 @@ import unzipper from "unzipper";
 import mammoth from "mammoth";
 import { fileURLToPath } from "url";
 
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.js";
-
-
-
 dotenv.config();
 
 const app = express();
@@ -43,7 +39,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /* =========================================================
-   ENSURE UPLOAD DIRECTORY EXISTS
+   UPLOAD DIRECTORY
 ========================================================= */
 
 const uploadDir = path.join(__dirname, "uploads");
@@ -51,10 +47,6 @@ const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
-
-/* =========================================================
-   FILE UPLOAD CONFIG
-========================================================= */
 
 const upload = multer({
   dest: uploadDir,
@@ -70,8 +62,8 @@ You are GEN-E, a structured AI Career Assistant.
 
 You ONLY answer career and education related queries.
 
-If user asks about politics, religion, health, crypto,
-relationships or unrelated topics, respond:
+If user asks about politics, religion, crypto,
+relationships, medical advice or unrelated topics, respond:
 
 "I am designed only for career and education guidance."
 
@@ -79,7 +71,7 @@ Response Style:
 - Structured markdown
 - Clear headings
 - Bullet points
-- Practical and concise
+- Concise and practical
 - End with next action step
 `;
 
@@ -95,7 +87,7 @@ function guardrail(message) {
     "relationship",
     "dating",
     "medical",
-    "health advice",
+    "health",
     "trading",
     "betting"
   ];
@@ -145,43 +137,45 @@ function generateResumePDF(content) {
 }
 
 /* =========================================================
-   FILE TEXT EXTRACTION
+   FILE TEXT EXTRACTION (Stable Version)
 ========================================================= */
 
 async function extractTextFromFile(file) {
   const ext = path.extname(file.originalname).toLowerCase();
 
- if (ext === ".pdf") {
-  const data = new Uint8Array(fs.readFileSync(file.path));
-
-  const pdf = await pdfjsLib.getDocument({ data }).promise;
-
-  let text = "";
-
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    const strings = content.items.map(item => item.str);
-    text += strings.join(" ") + "\n\n";
+  // ---------- PDF ----------
+  if (ext === ".pdf") {
+    try {
+      const data = fs.readFileSync(file.path);
+      const pdfParse = (await import("pdf-parse")).default;
+      const parsed = await pdfParse(data);
+      return parsed.text;
+    } catch (err) {
+      console.error("PDF parsing failed:", err);
+      return "Could not extract text from PDF.";
+    }
   }
 
-  return text;
-}
-
+  // ---------- DOCX ----------
   if (ext === ".docx") {
-    const result = await mammoth.extractRawText({
-      path: file.path
-    });
-    return result.value;
+    try {
+      const result = await mammoth.extractRawText({
+        path: file.path
+      });
+      return result.value;
+    } catch {
+      return "Could not extract text from DOCX.";
+    }
   }
 
+  // ---------- TXT ----------
   if (ext === ".txt") {
     return fs.readFileSync(file.path, "utf8");
   }
 
+  // ---------- ZIP ----------
   if (ext === ".zip") {
     let combined = "";
-
     const directory = await unzipper.Open.file(file.path);
 
     for (const entry of directory.files) {
@@ -198,7 +192,7 @@ async function extractTextFromFile(file) {
 }
 
 /* =========================================================
-   MAIN CHAT ENDPOINT
+   CHAT ENDPOINT
 ========================================================= */
 
 app.post("/api/chat", async (req, res) => {
@@ -222,7 +216,7 @@ Create an ATS-friendly resume using:
 
 ${message}
 
-Format strictly:
+Format:
 
 ## Professional Summary
 ## Core Skills
@@ -250,7 +244,7 @@ Include:
 
   if (intent === "score") {
     userPrompt = `
-Evaluate career readiness based on:
+Evaluate career readiness:
 
 ${message}
 
@@ -289,9 +283,7 @@ Include:
       ]
     });
 
-    const output =
-      response.output_text ||
-      response.output?.[0]?.content?.[0]?.text;
+    const output = response.output_text;
 
     if (intent === "resume") {
       const fileName = generateResumePDF(output);
@@ -304,7 +296,7 @@ Include:
     res.json({ reply: output });
 
   } catch (err) {
-    console.error("❌ OpenAI Error:", err);
+    console.error("Chat error:", err);
     res.status(500).json({ error: "AI processing failed" });
   }
 });
@@ -327,14 +319,29 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
         { role: "system", content: SYSTEM_PROMPT },
         {
           role: "user",
-          content: `Analyze this document:\n\n${extractedText}`
+          content: `
+The user uploaded a career document.
+
+Analyze it and provide:
+
+## Document Summary
+## Strengths
+## Weaknesses
+## Career Readiness Score (0-100%)
+## Improvement Suggestions
+## Clarifying Questions
+
+Document content:
+${extractedText}
+`
         }
       ]
     });
 
-    const output =
-      response.output_text ||
-      response.output?.[0]?.content?.[0]?.text;
+    const output = response.output_text;
+
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
 
     res.json({ reply: output });
 
@@ -345,7 +352,7 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
 });
 
 /* =========================================================
-   DOWNLOAD ENDPOINT
+   DOWNLOAD
 ========================================================= */
 
 app.get("/download/:file", (req, res) => {
@@ -359,7 +366,7 @@ app.get("/download/:file", (req, res) => {
 });
 
 /* =========================================================
-   HEALTH CHECK
+   HEALTH
 ========================================================= */
 
 app.get("/health", (req, res) => {
